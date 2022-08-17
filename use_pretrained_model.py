@@ -6,10 +6,6 @@ import json
 import torch
 import gzip
 
-# Inputs
-input_filename = sys.argv[1]
-output_filename = sys.argv[2]
-
 BATCHSIZE = 512
 MAX_SEQ_LEN = 128 # more than enough for over 99% of our tweets
 MODEL = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
@@ -27,15 +23,20 @@ def preprocess(text):
 
 def model_predict(model, tokenizer, texts):
     texts = [preprocess(text) for text in texts]
+
     encoded_input = tokenizer(texts, return_tensors='pt', padding=True,
                               truncation=True, max_length=MAX_SEQ_LEN)
-
     output = model(**encoded_input)
+
     scores = output.logits.detach().cpu().numpy()
     scores = softmax(scores, axis=-1).tolist()
     return scores
 
 if __name__ == "__main__":
+    # Inputs
+    input_filename = sys.argv[1]
+    output_filename = sys.argv[2]
+
     # Load model
     config = AutoConfig.from_pretrained(MODEL)
     tokenizer = AutoTokenizer.from_pretrained(MODEL)
@@ -59,7 +60,7 @@ if __name__ == "__main__":
 
             if len(curr_batch) == BATCHSIZE:
                 texts = [d["twt_txt"] for d in curr_batch]
-                scores = model_predict(tokenizer, model, texts)
+                scores = model_predict(model, tokenizer, texts)
                 for j, score in enumerate(scores):
                     curr_d = curr_batch[j]
                     curr_d["sentiment_scores"] = score
@@ -70,7 +71,7 @@ if __name__ == "__main__":
 
     if len(curr_batch) != 0:
         texts = [d["twt_txt"] for d in curr_batch]
-        scores = model_predict(texts)
+        scores = model_predict(model, tokenizer, texts)
         for j, score in enumerate(scores):
             curr_d = curr_batch[j]
             curr_d["sentiment_scores"] = score
