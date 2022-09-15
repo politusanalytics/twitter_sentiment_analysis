@@ -1,6 +1,6 @@
 # twitter_sentiment_analysis
 
-__Model page__: https://huggingface.co/cardiffnlp/twitter-xlm-roberta-base-sentiment. 
+__Model page__: https://huggingface.co/cardiffnlp/twitter-xlm-roberta-base-sentiment  
 __Paper__: https://arxiv.org/abs/2104.12250  
 
 Datasets:  
