@@ -5,6 +5,7 @@ import sys
 import json
 import torch
 import gzip
+import dateutil.parser
 
 BATCHSIZE = 512
 MAX_SEQ_LEN = 128 # more than enough for over 99% of our tweets
@@ -34,8 +35,10 @@ def model_predict(model, tokenizer, texts):
 
 if __name__ == "__main__":
     # Inputs
-    input_filename = sys.argv[1]
-    output_filename = sys.argv[2]
+    # If database: input "database". If input filename: should be json or json.gz file in json line format.
+    database_or_input_filename = sys.argv[1]
+
+    output_filename = "out.json"
 
     # Load model
     config = AutoConfig.from_pretrained(MODEL)
@@ -45,38 +48,78 @@ if __name__ == "__main__":
     model.to(DEVICE)
     model.eval()
 
-    # Open the output file
-    output_file = open(output_filename, "w", encoding="utf-8")
 
-    # Open and process the input file
-    with gzip.open(input_filename, "rt", encoding="utf-8") as input_file:
+    if database_or_input_filename == "database": # if database
+        import pymongo
+
+        # Connect to mongodb
+        mongo_client = pymongo.MongoClient("mongodb://localhost:27017/")
+        db = mongo_client["politus_twitter"]
+        tweet_col = db["tweets"]
+
+        tweets_to_predict = tweet_col.find({"senti": None, "date": {"$gte": dateutil.parser.parse("2022-07-08")}}, ["_id", "text"])
 
         curr_batch = []
-        for i, line in enumerate(input_file):
-            line = json.loads(line)
-            twt_id_str = list(line.keys())[0]
-            twt_txt = line[twt_id_str]
-            curr_batch.append({"twt_id_str": twt_id_str, "twt_txt": twt_txt})
+        for i, tweet in enumerate(tweets_to_predict):
+            id_str = tweet["_id"]
+            text = tweet["text"]
+
+            if len(text) > 0:
+                curr_batch.append({"_id": id_str, "text": text})
 
             if len(curr_batch) == BATCHSIZE:
-                texts = [d["twt_txt"] for d in curr_batch]
+                texts = [d["text"] for d in curr_batch]
                 scores = model_predict(model, tokenizer, texts)
+                # TODO: Think about multiple updates at the same time
                 for j, score in enumerate(scores):
                     curr_d = curr_batch[j]
-                    curr_d["sentiment_scores"] = score
-                    curr_d["final_sentiment"] = config.id2label[np.argmax(score)]
-                    output_file.write(json.dumps(curr_d) + "\n")
+                    tweet_col.update_one({"_id": curr_d["_id"]}, {"$set": {"senti": {"scores": score, "final": config.id2label[np.argmax(score)]}}})
 
                 curr_batch = []
 
-    if len(curr_batch) != 0:
-        texts = [d["twt_txt"] for d in curr_batch]
-        scores = model_predict(model, tokenizer, texts)
-        for j, score in enumerate(scores):
-            curr_d = curr_batch[j]
-            curr_d["sentiment_scores"] = score
-            curr_d["final_sentiment"] = config.id2label[np.argmax(score)]
-            output_file.write(json.dumps(curr_d) + "\n")
+        # Last incomplete batch, if any
+        if len(curr_batch) != 0:
+            texts = [d["text"] for d in curr_batch]
+            scores = model_predict(model, tokenizer, texts)
+            for j, score in enumerate(scores):
+                curr_d = curr_batch[j]
+                tweet_col.update_one({"_id": curr_d["_id"]}, {"$set": {"senti": {"scores": score, "final": config.id2label[np.argmax(score)]}}})
 
 
-    output_file.close()
+    else: # if filename
+
+        # Open the output file
+        output_file = open(output_filename, "w", encoding="utf-8")
+
+        # Open and process the input file
+        with gzip.open(database_or_input_filename, "rt", encoding="utf-8") as input_file:
+
+            curr_batch = []
+            for i, line in enumerate(input_file):
+                line = json.loads(line)
+                twt_id_str = list(line.keys())[0]
+                twt_txt = line[twt_id_str]
+                curr_batch.append({"twt_id_str": twt_id_str, "twt_txt": twt_txt})
+
+                if len(curr_batch) == BATCHSIZE:
+                    texts = [d["twt_txt"] for d in curr_batch]
+                    scores = model_predict(model, tokenizer, texts)
+                    for j, score in enumerate(scores):
+                        curr_d = curr_batch[j]
+                        curr_d["sentiment_scores"] = score
+                        curr_d["final_sentiment"] = config.id2label[np.argmax(score)]
+                        output_file.write(json.dumps(curr_d) + "\n")
+
+                    curr_batch = []
+
+        if len(curr_batch) != 0:
+            texts = [d["twt_txt"] for d in curr_batch]
+            scores = model_predict(model, tokenizer, texts)
+            for j, score in enumerate(scores):
+                curr_d = curr_batch[j]
+                curr_d["sentiment_scores"] = score
+                curr_d["final_sentiment"] = config.id2label[np.argmax(score)]
+                output_file.write(json.dumps(curr_d) + "\n")
+
+
+        output_file.close()
